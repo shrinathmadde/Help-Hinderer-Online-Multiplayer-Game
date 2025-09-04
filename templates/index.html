@@ -1,0 +1,70 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer Game</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Multiplayer Puzzle Game</h1>
+
+        <div class="card">
+            <div class="tabs">
+                <button class="tab-btn active" id="create-tab">Create Game</button>
+                <button class="tab-btn" id="join-tab">Join Game</button>
+            </div>
+
+            <div class="tab-content" id="create-content">
+                <h2>Create a New Game</h2>
+                <form id="create-form" action="javascript:void(0);">
+
+                    <div class="form-group">
+                        <label for="create-username">Your Name:</label>
+                        <input type="text" id="create-username" required>
+                    </div>
+                    <button type="submit" class="btn">Create Game</button>
+                </form>
+            </div>
+
+            <div class="tab-content hidden" id="join-content">
+                <h2>Join an Existing Game</h2>
+                <form id="join-form">
+                    <div class="form-group">
+                        <label for="join-code">Game Code:</label>
+                        <input type="text" id="join-code" required placeholder="Enter 6-digit code">
+                    </div>
+                    <div class="form-group">
+                        <label for="join-username">Your Name:</label>
+                        <input type="text" id="join-username" required>
+                    </div>
+                    <button type="submit" class="btn">Join Game</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Room created success message -->
+        <div id="room-created" class="hidden">
+            <div class="card success-card">
+                <h2>Game Room Created!</h2>
+                <p>Share this code with another player:</p>
+                <div class="code-display">
+                    <span id="room-code"></span>
+                    <button id="copy-code" class="btn-small">Copy</button>
+                </div>
+                <p>Waiting for players to join...</p>
+                <div class="players-list">
+                    <h3>Players:</h3>
+                    <ul id="players-list"></ul>
+                </div>
+                <button id="start-game" class="btn hidden">Start Game</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
