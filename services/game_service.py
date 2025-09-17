@@ -1,63 +1,37 @@
-"""
-Service for game-related operations
-"""
+# services/game_service.py
 import logging
 from typing import Optional, Dict, Any
 
 from models.game_room import GameRoom
-from services.room_service import get_room
+from services.room_service import get_room, save_room, promote_to_live  # NEW
 import config
 
 logger = logging.getLogger(__name__)
 
-
 def start_game(room_code: str, player_id: str) -> Dict[str, Any]:
-    """Start a game in a room
-
-    Args:
-        room_code: Room code
-        player_id: ID of the player trying to start the game (must be moderator)
-
-    Returns:
-        Dict[str, Any]: Result with success flag and message
-    """
-    # Normalize room code to upper case
     room_code = room_code.upper()
-
     room = get_room(room_code)
-
     if not room:
         logger.warning(f"Room {room_code} not found")
         return {"success": False, "message": "Room not found"}
 
-    # Verify the player is the moderator
     if room.moderator_id != player_id:
-        logger.warning(f"Non-moderator tried to start game: player={player_id}, moderator={room.moderator_id}")
         return {"success": False, "message": "Only the moderator can start the game"}
 
-    # Check if the game is already started
-    if room.started:
-        logger.warning(f"Game already started in room {room_code}")
-        return {"success": False, "message": "Game already started"}
-
-    # Make sure we have enough players
     real_players = [pid for pid, pdata in room.players.items() if not pdata.get('moderator', False)]
-    logger.info(f"Players in room {room_code}: {len(real_players)}/{room.max_players}")
-
     if len(real_players) < room.max_players:
-        logger.warning(f"Not enough players to start game: {len(real_players)}/{room.max_players}")
-        return {
-            "success": False,
-            "message": f"Need {room.max_players} players to start (currently {len(real_players)})"
-        }
+        return {"success": False, "message": f"Need {room.max_players} players to start (currently {len(real_players)})"}
 
-    # Start the game
     if room.start_game():
+        # Persist started flag
+        save_room(room)
+        # Keep engine/UI alive in this process
+        promote_to_live(room)
         logger.info(f"Game successfully started in room {room_code}")
         return {"success": True, "message": "Game started successfully"}
-    else:
-        logger.error(f"Failed to start game in room {room_code}")
-        return {"success": False, "message": "Failed to start game"}
+
+    return {"success": False, "message": "Failed to start game"}
+
 
 
 def process_player_input(room_code: str, player_id: str,

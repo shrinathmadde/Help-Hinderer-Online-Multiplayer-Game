@@ -4,7 +4,7 @@ Main application entry point
 import logging
 from flask import Flask
 from flask_socketio import SocketIO
-
+import os
 import config
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ def create_app():
     # Initialize Flask application
     app = Flask(__name__)
     app.config['SECRET_KEY'] = config.SECRET_KEY
-
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     # Initialize Socket.IO
     socketio = SocketIO(app, cors_allowed_origins=config.CORS_ALLOWED_ORIGINS)
 
@@ -69,4 +69,4 @@ if __name__ == '__main__':
 
     logger.info("Starting Socket.IO server...")
 
-    socketio.run(app, host='0.0.0.0', port=5001, debug=True)
+    socketio.run(app, host="0.0.0.0", port=5001, debug=False, use_reloader=False)

@@ -1,6 +1,5 @@
-"""
-Service for managing game rooms
-"""
+# services/room_service.py
+import json
 import random
 import string
 import logging
@@ -9,69 +8,67 @@ from typing import Dict, Optional, List, Tuple
 from models.game_room import GameRoom
 import config
 
+from services.redis_client import redis_client  # NEW
+
 logger = logging.getLogger(__name__)
 
-# Global storage for active rooms
-active_rooms: Dict[str, GameRoom] = {}
+# In-process map for live Engine/UI (optional for now; used only after start_game)
+# Keyed by room_code; values are GameRoom objects with engine/ui attached
+_local_live_rooms: Dict[str, GameRoom] = {}
+
+def _redis_key(room_code: str) -> str:
+    return f"room:{room_code.upper()}"
 
 def generate_room_code(length: int = config.ROOM_CODE_LENGTH) -> str:
-    """Generate a unique room code
-
-    Args:
-        length: Length of the room code
-
-    Returns:
-        str: Unique room code
-    """
     while True:
         code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
-        if code not in active_rooms:
+        if not redis_client.exists(_redis_key(code)):
             return code
 
 def create_room(username: str, max_players: int = config.DEFAULT_MAX_PLAYERS) -> Tuple[str, str, GameRoom]:
-    """Create a new game room
-
-    Args:
-        username: Username of the moderator
-        max_players: Maximum number of players allowed
-
-    Returns:
-        Tuple[str, str, GameRoom]: Room code, moderator ID, and room instance
-    """
     from uuid import uuid4
-    print("creating room")
     room_code = generate_room_code()
     moderator_id = str(uuid4())
 
     room = GameRoom(room_code, max_players)
     room.add_player(moderator_id, username, is_moderator=True)
-    active_rooms[room_code] = room
 
+    # Save metadata to Redis
+    redis_client.set(_redis_key(room_code), json.dumps(room.to_meta()))
     logger.info(f"Created room {room_code} with moderator {username} ({moderator_id})")
-    logger.info(f"Active rooms: {list(active_rooms.keys())}")
-    print("created room")
+
     return room_code, moderator_id, room
 
-def join_room(room_code: str, username: str) -> Tuple[bool, str, str]:
-    """Add a player to an existing room
+def _get_meta(room_code: str) -> Optional[dict]:
+    raw = redis_client.get(_redis_key(room_code))
+    return json.loads(raw) if raw else None
 
-    Args:
-        room_code: Room code
-        username: Player's username
-
-    Returns:
-        Tuple[bool, str, str]: Success flag, player ID, and error message
-    """
-    from uuid import uuid4
-
-    # Normalize room code to upper case
+def get_room(room_code: str) -> Optional[GameRoom]:
     room_code = room_code.upper()
 
-    if room_code not in active_rooms:
+    # If we have a local "live" room (engine running), prefer it
+    if room_code in _local_live_rooms:
+        return _local_live_rooms[room_code]
+
+    meta = _get_meta(room_code)
+    if not meta:
+        return None
+    return GameRoom.from_meta(meta)
+
+def save_room(room: GameRoom) -> None:
+    """Persist metadata changes to Redis."""
+    redis_client.set(_redis_key(room.room_code), json.dumps(room.to_meta()))
+
+def join_room(room_code: str, username: str) -> Tuple[bool, str, str]:
+    from uuid import uuid4
+    room_code = room_code.upper()
+
+    meta = _get_meta(room_code)
+    if not meta:
         logger.warning(f"Room not found: {room_code}")
         return False, "", "Room not found"
 
-    room = active_rooms[room_code]
+    room = GameRoom.from_meta(meta)
 
     if room.is_full():
         logger.warning(f"Room is full: {room_code}")
@@ -79,95 +76,59 @@ def join_room(room_code: str, username: str) -> Tuple[bool, str, str]:
 
     player_id = str(uuid4())
     success = room.add_player(player_id, username)
-
     if not success:
-        logger.warning(f"Failed to add player to room: {room_code}")
         return False, "", "Failed to join room"
 
-    logger.info(f"Player {player_id} ({username}) successfully joined room {room_code}")
-    logger.info(f"Players in room: {list(room.players.keys())}")
-
+    save_room(room)  # persist back
+    logger.info(f"Player {player_id} ({username}) joined room {room_code}")
     return True, player_id, ""
 
-def get_room(room_code: str) -> Optional[GameRoom]:
-    """Get a room by code
-
-    Args:
-        room_code: Room code
-
-    Returns:
-        Optional[GameRoom]: Room instance or None if not found
-    """
-    # Normalize room code to upper case
-    room_code = room_code.upper()
-    return active_rooms.get(room_code)
-
-def remove_room(room_code: str) -> bool:
-    """Remove a room
-
-    Args:
-        room_code: Room code
-
-    Returns:
-        bool: True if room was removed, False if room was not found
-    """
-    # Normalize room code to upper case
-    room_code = room_code.upper()
-
-    if room_code in active_rooms:
-        room = active_rooms[room_code]
-        room.active = False  # Stop any running game loops
-        del active_rooms[room_code]
-        logger.info(f"Removed room {room_code}")
-        return True
-
-    return False
-
 def remove_player(room_code: str, player_id: str) -> bool:
-    """Remove a player from a room
-
-    Args:
-        room_code: Room code
-        player_id: Player ID
-
-    Returns:
-        bool: True if player was removed, False otherwise
-    """
-    # Normalize room code to upper case
     room_code = room_code.upper()
 
-    if room_code not in active_rooms:
-        return False
+    # Prefer local live room if available
+    room = _local_live_rooms.get(room_code)
+    if not room:
+        meta = _get_meta(room_code)
+        if not meta:
+            return False
+        room = GameRoom.from_meta(meta)
 
-    room = active_rooms[room_code]
     success = room.remove_player(player_id)
-
-    # If room is now empty, remove it
-    if success and room.is_empty():
-        logger.info(f"Room {room_code} is now empty, removing")
-        remove_room(room_code)
-
+    if success:
+        if room.is_empty():
+            remove_room(room_code)
+        else:
+            save_room(room)
     return success
 
-def get_active_rooms() -> List[str]:
-    """Get a list of all active room codes
+def remove_room(room_code: str) -> bool:
+    room_code = room_code.upper()
 
-    Returns:
-        List[str]: List of active room codes
-    """
-    return list(active_rooms.keys())
+    # Stop local engine/UI if present
+    if room_code in _local_live_rooms:
+        live = _local_live_rooms.pop(room_code)
+        live.active = False  # signal loop to stop
+
+    return bool(redis_client.delete(_redis_key(room_code)))
+
+def get_active_rooms() -> List[str]:
+    keys = redis_client.keys("room:*")
+    return [k.split("room:", 1)[1] for k in keys]
 
 def cleanup_inactive_rooms() -> int:
-    """Remove rooms that are no longer active
-
-    Returns:
-        int: Number of rooms removed
-    """
     removed = 0
-    for room_code in list(active_rooms.keys()):
-        room = active_rooms[room_code]
+    for code in get_active_rooms():
+        meta = _get_meta(code)
+        if not meta:
+            continue
+        room = GameRoom.from_meta(meta)
         if not room.active or room.is_empty():
-            remove_room(room_code)
-            removed += 1
-
+            if remove_room(code):
+                removed += 1
     return removed
+
+# Helper (used by game_service after start_game)
+def promote_to_live(room: GameRoom) -> None:
+    """Keep a local reference for running engine/UI for this process."""
+    _local_live_rooms[room.room_code] = room

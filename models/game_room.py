@@ -174,3 +174,24 @@ class GameRoom:
             'max_players': self.max_players,
             'started': self.started
         }
+    def to_meta(self) -> dict:
+        """Serialize only room metadata (no engine/UI)."""
+        return {
+            "room_code": self.room_code,
+            "players": self.players,
+            "max_players": self.max_players,
+            "started": self.started,
+            "active": self.active,
+            "moderator_id": self.moderator_id,
+        }
+
+    @staticmethod
+    def from_meta(meta: dict) -> "GameRoom":
+        """Rebuild a GameRoom (engine/ui will be None; attach later if present)."""
+        room = GameRoom(meta["room_code"], meta.get("max_players", 2))
+        room.players = meta.get("players", {})
+        room.started = meta.get("started", False)
+        room.active = meta.get("active", True)
+        room.moderator_id = meta.get("moderator_id")
+        # engine/ui/playerInput/saver stay as is (None/new saver in __init__)
+        return room
