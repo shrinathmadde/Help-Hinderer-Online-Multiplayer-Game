@@ -20,6 +20,10 @@ def init_routes(app: Flask, socketio: SocketIO):
     """
     logger.info("Initializing application routes")
 
+    # Make socketio available to services (like game_service)
+    import services.game_service as game_service
+    game_service.socketio = socketio
+
     # Initialize game routes
     init_game_routes(app)
 

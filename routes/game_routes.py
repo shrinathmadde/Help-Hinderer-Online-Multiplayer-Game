@@ -11,6 +11,9 @@ logger = logging.getLogger(__name__)
 game_blueprint = Blueprint('game', __name__)
 
 
+
+
+
 @game_blueprint.route('/')
 def index():
     """Home page

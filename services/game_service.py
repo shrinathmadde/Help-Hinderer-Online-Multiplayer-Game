@@ -4,9 +4,65 @@ from typing import Optional, Dict, Any
 
 from models.game_room import GameRoom
 from services.room_service import get_room, save_room, promote_to_live  # NEW
+from services.board_service import init_board
 import config
 
 logger = logging.getLogger(__name__)
+
+
+
+
+def init_and_broadcast_board(room_code: str, room=None):
+    """
+    Initializes the shared 4x4 board in Redis and broadcasts it to all clients
+    in the given room via Socket.IO.
+
+    Usage (inside start_game, after promote_to_live(room)):
+        init_and_broadcast_board(room_code, room)
+
+    Returns:
+        dict: The board state that was stored/emitted.
+    """
+    # Lazy import to avoid circulars if room_service imports game_service
+    try:
+        from services import room_service as _room_service
+    except Exception:
+        _room_service = None
+
+    # Ensure we have a room object
+    if room is None and _room_service:
+        room = _room_service.get_room(room_code)
+
+    if not room or not getattr(room, "players", None):
+        # Minimal fail-safe: initialize with empty mapping
+        player_ids_by_number = {}
+    else:
+        # Build a map {0: player_id_for_player0, 1: player_id_for_player1}
+        player_ids_by_number = {}
+        for pid, pdata in room.players.items():
+            if getattr(pdata, "get", None):
+                # pdata is likely a dict
+                if pdata.get("moderator"):
+                    continue
+                pn = pdata.get("player_number")
+            else:
+                # or a simple object with attributes
+                if getattr(pdata, "moderator", False):
+                    continue
+                pn = getattr(pdata, "player_number", None)
+
+            if pn in (0, 1):
+                player_ids_by_number[pn] = pid
+
+    # Create and persist the board
+    board_state = init_board(room_code, player_ids_by_number)
+
+    # Broadcast to everyone in the room (expects `socketio` to be attached to this module)
+    sio = globals().get("socketio", None)
+    if sio:
+        sio.emit("board_update", {"room_code": room_code, "board": board_state}, to=room_code)
+
+    return board_state
 
 def start_game(room_code: str, player_id: str) -> Dict[str, Any]:
     room_code = room_code.upper()
@@ -27,6 +83,7 @@ def start_game(room_code: str, player_id: str) -> Dict[str, Any]:
         save_room(room)
         # Keep engine/UI alive in this process
         promote_to_live(room)
+        init_and_broadcast_board(room_code, room)
         logger.info(f"Game successfully started in room {room_code}")
         return {"success": True, "message": "Game started successfully"}
 

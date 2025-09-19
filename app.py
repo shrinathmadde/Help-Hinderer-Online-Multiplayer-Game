@@ -9,24 +9,6 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# Check if original game components are available
-try:
-    from backend.engine import Engine, EngineImpl, TrialResult
-    from backend.engine_state import EngineState, isEngineStateTransitionAllowed
-    from backend.game_state import GameState, isValidGameState
-    from backend.util import Direction
-    from backend.block_provider import BlockProvider, BlockProviderFromPremade
-    from backend.player_input import PlayerInput
-    from backend.saver import Saver, AppendFileSaver
-    from backend.trial_provider import TrialProvider, TrialProviderFromPremade
-    from assets.premade_trials.index import namedPremadeIndex
-    from assets.premade_blocks.test_blocks import premade_test_blocks
-
-    ORIGINAL_GAME_IMPORTS = True
-    logger.info("Successfully imported original game components")
-except ImportError as e:
-    ORIGINAL_GAME_IMPORTS = False
-    logger.error(f"Failed to import original game components: {e}")
 
 def create_app():
     """Create and configure the Flask application
@@ -37,7 +19,6 @@ def create_app():
     # Initialize Flask application
     app = Flask(__name__)
     app.config['SECRET_KEY'] = config.SECRET_KEY
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     # Initialize Socket.IO
     socketio = SocketIO(app, cors_allowed_origins=config.CORS_ALLOWED_ORIGINS)
 
@@ -60,7 +41,6 @@ app, socketio = create_app()
 # Start the server if run directly
 if __name__ == '__main__':
     logger.info("Starting Multiplayer Puzzle Game server...")
-    logger.info(f"Original game imports successful: {ORIGINAL_GAME_IMPORTS}")
 
     # Print available routes for debugging
     logger.info("Available routes:")

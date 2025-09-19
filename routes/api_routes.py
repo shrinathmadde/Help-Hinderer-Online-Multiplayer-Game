@@ -4,12 +4,13 @@ API routes for the application
 import logging
 from flask import Blueprint, request, jsonify
 
-from services import room_service, game_service
+from services import room_service, game_service, board_service
 
 logger = logging.getLogger(__name__)
 
 # Create blueprint for API routes
 api_blueprint = Blueprint('api', __name__)
+
 
 
 @api_blueprint.route('/create-room', methods=['POST'])
