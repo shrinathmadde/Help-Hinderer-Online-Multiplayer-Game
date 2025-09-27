@@ -8,7 +8,7 @@ from typing import Dict, Optional, List, Tuple
 from models.game_room import GameRoom
 import config
 
-from services.redis_client import redis_client  # NEW
+from services.redis_client import get_redis  # NEW
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ def _redis_key(room_code: str) -> str:
 def generate_room_code(length: int = config.ROOM_CODE_LENGTH) -> str:
     while True:
         code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
-        if not redis_client.exists(_redis_key(code)):
+        if not get_redis.exists(_redis_key(code)):
             return code
 
 def create_room(username: str, max_players: int = config.DEFAULT_MAX_PLAYERS) -> Tuple[str, str, GameRoom]:
@@ -34,13 +34,13 @@ def create_room(username: str, max_players: int = config.DEFAULT_MAX_PLAYERS) ->
     room.add_player(moderator_id, username, is_moderator=True)
 
     # Save metadata to Redis
-    redis_client.set(_redis_key(room_code), json.dumps(room.to_meta()))
+    get_redis.set(_redis_key(room_code), json.dumps(room.to_meta()))
     logger.info(f"Created room {room_code} with moderator {username} ({moderator_id})")
 
     return room_code, moderator_id, room
 
 def _get_meta(room_code: str) -> Optional[dict]:
-    raw = redis_client.get(_redis_key(room_code))
+    raw = get_redis.get(_redis_key(room_code))
     return json.loads(raw) if raw else None
 
 def get_room(room_code: str) -> Optional[GameRoom]:
@@ -57,7 +57,7 @@ def get_room(room_code: str) -> Optional[GameRoom]:
 
 def save_room(room: GameRoom) -> None:
     """Persist metadata changes to Redis."""
-    redis_client.set(_redis_key(room.room_code), json.dumps(room.to_meta()))
+    get_redis.set(_redis_key(room.room_code), json.dumps(room.to_meta()))
 
 def join_room(room_code: str, username: str) -> Tuple[bool, str, str]:
     from uuid import uuid4
@@ -110,10 +110,10 @@ def remove_room(room_code: str) -> bool:
         live = _local_live_rooms.pop(room_code)
         live.active = False  # signal loop to stop
 
-    return bool(redis_client.delete(_redis_key(room_code)))
+    return bool(get_redis.delete(_redis_key(room_code)))
 
 def get_active_rooms() -> List[str]:
-    keys = redis_client.keys("room:*")
+    keys = get_redis.keys("room:*")
     return [k.split("room:", 1)[1] for k in keys]
 
 def cleanup_inactive_rooms() -> int:

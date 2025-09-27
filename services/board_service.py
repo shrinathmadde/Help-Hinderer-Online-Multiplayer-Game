@@ -2,7 +2,7 @@
 import json
 import random
 from typing import Dict, Any, Tuple, Optional
-from services.redis_client import redis_client
+from services.redis_client import get_redis
 
 BOARD_SIZE = 4
 
@@ -50,15 +50,15 @@ def init_board(room_code: str, player_ids_by_number: Dict[int, str]) -> Dict[str
     mat[p1[0]][p1[1]] = "P1"
     mat[target[0]][target[1]] = "STAR"
 
-    redis_client.set(_key(room_code), json.dumps(state))
+    get_redis.set(_key(room_code), json.dumps(state))
     return state
 
 def get_board(room_code: str) -> Optional[Dict[str, Any]]:
-    raw = redis_client.get(_key(room_code))
+    raw = get_redis.get(_key(room_code))
     return json.loads(raw) if raw else None
 
 def set_board(room_code: str, state: Dict[str, Any]) -> None:
-    redis_client.set(_key(room_code), json.dumps(state))
+    get_redis.set(_key(room_code), json.dumps(state))
 
 def move_player(room_code: str, player_number: int, drow: int, dcol: int) -> Optional[Dict[str, Any]]:
     """

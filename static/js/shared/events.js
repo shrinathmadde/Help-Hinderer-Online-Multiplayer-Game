@@ -8,4 +8,8 @@ export const EVT = Object.freeze({
   PLAYER_READY: 'player_ready',
   START_GAME: 'start_game',
   JOIN_GAME: 'join_game',
+
+  TRIAL_START: 'trial_start',   // -> { trial_idx, board, deadline_ts }
+  TRIAL_END: 'trial_end',       // -> { trial_idx, reason: 'captured'|'timeout', board }
+  GAME_OVER: 'game_over',       // -> { results }
 });

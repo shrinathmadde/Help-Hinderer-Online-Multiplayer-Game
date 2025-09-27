@@ -1,74 +1,170 @@
 # services/game_service.py
-import logging
-from typing import Optional, Dict, Any
+import json, time, logging
+from typing import Optional, Dict, Any, List
 
-from models.game_room import GameRoom
-from services.room_service import get_room, save_room, promote_to_live  # NEW
-from services.board_service import init_board
+from services.redis_client import get_redis          # <- ensure you have a getter (or your redis_client)
+from services.room_service import get_room, save_room, promote_to_live
+from services import game_config                     # <- holds GAME_CONFIG
 import config
 
 logger = logging.getLogger(__name__)
 
+# ---- Redis keys for this feature ----
+def _k_trials(code: str):       return f"room:{code}:trials"
+def _k_trial_idx(code: str):    return f"room:{code}:trial_index"
+def _k_board(code: str):        return f"room:{code}:board"
+def _k_deadline(code: str):     return f"room:{code}:trial_deadline"
 
+def _r(r=None):
+    """Return a Redis client; accept an override for testability."""
+    return r or get_redis
+# ---- Helpers to read/write trials meta ----
+def _store_trials(room_code: str, trials: List[dict], r=None):
+    r = _r(r)
+    r.set(_k_trials(room_code), json.dumps(trials))
 
+def _load_trials(room_code: str, r=None) -> Optional[List[dict]]:
+    r = _r(r)
+    raw = r.get(_k_trials(room_code))
+    return json.loads(raw) if raw else None
 
-def init_and_broadcast_board(room_code: str, room=None):
-    """
-    Initializes the shared 4x4 board in Redis and broadcasts it to all clients
-    in the given room via Socket.IO.
+def _set_trial_idx(room_code: str, idx: int, r=None):
+    r = _r(r)
+    r.set(_k_trial_idx(room_code), str(idx))
 
-    Usage (inside start_game, after promote_to_live(room)):
-        init_and_broadcast_board(room_code, room)
+def _get_trial_idx(room_code: str, r=None) -> int:
+    r = _r(r)
+    raw = r.get(_k_trial_idx(room_code))
+    return int(raw) if raw is not None else 0
 
-    Returns:
-        dict: The board state that was stored/emitted.
-    """
-    # Lazy import to avoid circulars if room_service imports game_service
-    try:
-        from services import room_service as _room_service
-    except Exception:
-        _room_service = None
+def _save_board(room_code: str, board: dict, r=None):
+    r = _r(r)
+    r.set(_k_board(room_code), json.dumps(board))
 
-    # Ensure we have a room object
-    if room is None and _room_service:
-        room = _room_service.get_room(room_code)
+def _load_board(room_code: str, r=None) -> Optional[dict]:
+    r = _r(r)
+    raw = r.get(_k_board(room_code))
+    return json.loads(raw) if raw else None
 
-    if not room or not getattr(room, "players", None):
-        # Minimal fail-safe: initialize with empty mapping
-        player_ids_by_number = {}
-    else:
-        # Build a map {0: player_id_for_player0, 1: player_id_for_player1}
-        player_ids_by_number = {}
-        for pid, pdata in room.players.items():
-            if getattr(pdata, "get", None):
-                # pdata is likely a dict
-                if pdata.get("moderator"):
-                    continue
-                pn = pdata.get("player_number")
-            else:
-                # or a simple object with attributes
-                if getattr(pdata, "moderator", False):
-                    continue
-                pn = getattr(pdata, "player_number", None)
+def _set_deadline(room_code: str, ts: float, r=None):
+    r = _r(r)
+    r.set(_k_deadline(room_code), str(int(ts)))
 
-            if pn in (0, 1):
-                player_ids_by_number[pn] = pid
+def _get_deadline(room_code: str, r=None) -> Optional[int]:
+    r = _r(r)
+    raw = r.get(_k_deadline(room_code))
+    return int(raw) if raw else None
 
-    # Create and persist the board
-    board_state = init_board(room_code, player_ids_by_number)
+# ---- Trial/board initialization ----
+def _player_map(room, max_players=2) -> Dict[int, str]:
+    """Create {0: player_id_for_R, 1: player_id_for_B} from room.players."""
+    mapping = {}
+    # your room stores players as dict; pick any two non-moderators by their assigned player_number if present
+    for pid, pdata in room.players.items():
+        if pdata.get('moderator'): 
+            continue
+        pn = pdata.get('player_number')
+        if pn in (0, 1):
+            mapping[pn] = pid
+        # fallback if no player_number assigned: fill in order
+        if 'player_number' not in pdata and len(mapping) < 2:
+            mapping[len(mapping)] = pid
+    return mapping
 
-    # Broadcast to everyone in the room (expects `socketio` to be attached to this module)
-    sio = globals().get("socketio", None)
+def _init_board_from_trial(room_code: str, trial: dict, room) -> dict:
+    """Build the authoritative board for this trial and save it."""
+    pm = _player_map(room)
+    # trial.start_positions has "R" and "B" → map to player indexes 0/1
+    start = trial["start_positions"]
+    board = {
+        "size": game_config.GAME_CONFIG.get("board_size", 4),
+        "players": [
+            {"id": pm.get(0), "username": room.players.get(pm.get(0), {}).get("username"), "pos": start["R"], "color": "red"},
+            {"id": pm.get(1), "username": room.players.get(pm.get(1), {}).get("username"), "pos": start["B"], "color": "blue"},
+        ],
+        "target": trial["target"],
+        "capturer": trial["capturer"],  # "R" or "B"
+        "winner": None,
+    }
+    _save_board(room_code, board)
+    return board
+
+def _emit(sio, event: str, payload: dict, room_code: str):
     if sio:
-        sio.emit("board_update", {"room_code": room_code, "board": board_state}, to=room_code)
+        sio.emit(event, payload, to=room_code)
 
-    return board_state
+def _start_trial(room_code: str, idx: int, sio=None):
+    r = _r()
+    trials = _load_trials(room_code, r) or []
+    if idx >= len(trials):
+        # no more trials
+        _emit(sio, "game_over", {"message": "All trials finished"}, room_code)
+        return None
 
+    room = get_room(room_code)
+    trial = trials[idx]
+    board = _init_board_from_trial(room_code, trial, room)
+
+    # set deadline
+    deadline = int(time.time()) + int(trial.get("time_limit_sec", 20))
+    _set_deadline(room_code, deadline, r)
+    _set_trial_idx(room_code, idx, r)
+
+    # broadcast start (reuse GAME_START for each trial)
+    _emit(sio, "game_start", {
+        "trial_index": idx,
+        "trial_total": len(trials),
+        "board": board,
+        "deadline": deadline,
+    }, room_code)
+
+    # optional: background timer to auto-advance when time runs out
+    bg = globals().get("socketio", None)
+    if bg:
+        bg.start_background_task(_trial_timer_task, room_code)
+
+    return board
+
+def _trial_timer_task(room_code: str):
+    sio = globals().get("socketio", None)
+    r = _r()
+    while True:
+        deadline = _get_deadline(room_code, r)
+        if deadline is None:
+            return
+        now = int(time.time())
+        if now >= deadline:
+            # time’s up → advance
+            _advance_trial(room_code, reason="timeout", sio=sio)
+            return
+        # sleep a bit
+        if sio:
+            sio.sleep(1)
+        else:
+            time.sleep(1)
+
+def _advance_trial(room_code: str, reason: str, sio=None):
+    r = _r()
+    idx = _get_trial_idx(room_code, r)
+    trials = _load_trials(room_code, r) or []
+    if idx >= len(trials):
+        return
+
+    # notify completion
+    _emit(sio, "trial_complete", {"trial_index": idx, "reason": reason}, room_code)
+
+    next_idx = idx + 1
+    if next_idx >= len(trials):
+        _emit(sio, "game_over", {"message": "All trials finished"}, room_code)
+        return
+
+    _start_trial(room_code, next_idx, sio)
+
+# ---- PUBLIC API you already call in sockets ----
 def start_game(room_code: str, player_id: str) -> Dict[str, Any]:
     room_code = room_code.upper()
     room = get_room(room_code)
     if not room:
-        logger.warning(f"Room {room_code} not found")
         return {"success": False, "message": "Room not found"}
 
     if room.moderator_id != player_id:
@@ -79,229 +175,46 @@ def start_game(room_code: str, player_id: str) -> Dict[str, Any]:
         return {"success": False, "message": f"Need {room.max_players} players to start (currently {len(real_players)})"}
 
     if room.start_game():
-        # Persist started flag
         save_room(room)
-        # Keep engine/UI alive in this process
         promote_to_live(room)
-        init_and_broadcast_board(room_code, room)
-        logger.info(f"Game successfully started in room {room_code}")
+
+        # NEW: load trials from config and persist under room code
+        trials = game_config.GAME_CONFIG.get("trials", [])
+        _store_trials(room_code, trials)
+
+        # Kick off trial #0 (sets board + deadline in Redis and emits GAME_START)
+        _start_trial(room_code, 0, sio=globals().get("socketio"))
         return {"success": True, "message": "Game started successfully"}
 
     return {"success": False, "message": "Failed to start game"}
 
-
-
-def process_player_input(room_code: str, player_id: str,
-                         direction: Optional[str] = None,
-                         special: Optional[str] = None) -> bool:
-    """Process player input in a game
-
-    Args:
-        room_code: Room code
-        player_id: Player ID
-        direction: Movement direction (UP, DOWN, LEFT, RIGHT)
-        special: Special action (e.g., PLACE_BLOCK)
-
-    Returns:
-        bool: True if input was processed, False otherwise
-    """
-    # Normalize room code to upper case
-    room_code = room_code.upper()
-
-    room = get_room(room_code)
-
-    if not room or not room.started or player_id not in room.players:
-        return False
-
-    # Get player number
-    player_number = room.players[player_id].get('player_number')
-    if player_number is None:
-        return False
-
-    # Set input in the network input adapter
-    if room.playerInput:
-        if special == "PLACE_BLOCK":
-            logger.debug(f"Player {player_number} placing block in room {room_code}")
-            room.playerInput.set_player_input(player_number, None, 0, "PLACE_BLOCK")
-        else:
-            logger.debug(f"Player {player_number} moving {direction} in room {room_code}")
-            room.playerInput.set_player_input(player_number, direction, 1, None)
-        return True
-
-    return False
-
-
-def process_key_down(room_code: str, player_id: str, key_name: str) -> bool:
-    """Process key press in a game
-
-    Args:
-        room_code: Room code
-        player_id: Player ID
-        key_name: Name of the key
-
-    Returns:
-        bool: True if key press was processed, False otherwise
-    """
-    # Normalize room code to upper case
-    room_code = room_code.upper()
-
-    room = get_room(room_code)
-
-    if not room or not room.started or player_id not in room.players:
-        return False
-
-    # Get player number
-    player_number = room.players[player_id].get('player_number')
-    if player_number is None:
-        return False
-
-    # Set key state in the network input adapter
-    if room.playerInput:
-        room.playerInput.key_down(player_number, key_name)
-        return True
-
-    return False
-
-
-def process_key_up(room_code: str, player_id: str, key_name: str) -> bool:
-    """Process key release in a game
-
-    Args:
-        room_code: Room code
-        player_id: Player ID
-        key_name: Name of the key
-
-    Returns:
-        bool: True if key release was processed, False otherwise
-    """
-    # Normalize room code to upper case
-    room_code = room_code.upper()
-
-    room = get_room(room_code)
-
-    if not room or not room.started or player_id not in room.players:
-        return False
-
-    # Get player number
-    player_number = room.players[player_id].get('player_number')
-    if player_number is None:
-        return False
-
-    # Set key state in the network input adapter
-    if room.playerInput:
-        room.playerInput.key_up(player_number, key_name)
-        return True
-
-    return False
-
-
-def mark_player_ready(room_code: str, player_id: str) -> bool:
-    """Mark a player as ready
-
-    Args:
-        room_code: Room code
-        player_id: Player ID
-
-    Returns:
-        bool: True if player was marked as ready, False otherwise
-    """
-    # Normalize room code to upper case
-    room_code = room_code.upper()
-
-    room = get_room(room_code)
-
-    if not room or player_id not in room.players:
-        return False
-
-    # Mark player as ready
-    room.players[player_id]['ready'] = True
-    logger.info(f"Player {player_id} is now ready in room {room_code}")
-
-    return True
-
-
-def get_game_state(room_code: str) -> Optional[Dict[str, Any]]:
-    """Get the current game state
-
-    Args:
-        room_code: Room code
-
-    Returns:
-        Optional[Dict[str, Any]]: Game state or None if game is not running
-    """
-    # Normalize room code to upper case
-    room_code = room_code.upper()
-
-    room = get_room(room_code)
-
-    if not room or not room.started or not room.engine:
+def apply_move_and_maybe_advance(room_code: str, player_id: str, dx: int, dy: int):
+    """Called by your socket handler on each BOARD_UPDATE intent."""
+    r = _r()
+    board = _load_board(room_code, r)
+    if not board:
         return None
 
-    try:
-        return {
-            'engine_state': str(room.engine.getEngineState()),
-            'scores': room.engine.getScores(),
-            'player_turn': room.engine._gameState.playerTurn if hasattr(room.engine, '_gameState') else 0
-        }
-    except Exception as e:
-        logger.exception(f"Error getting game state: {e}")
-        return None
+    # find mover
+    me = next((p for p in board["players"] if p["id"] == player_id), None)
+    if not me:
+        return board
 
+    size = board["size"]
+    x, y = me["pos"]
+    nx = max(0, min(size - 1, x + dx))
+    ny = max(0, min(size - 1, y + dy))
+    me["pos"] = [nx, ny]
 
-def run_game_loop(room: GameRoom, socketio) -> None:
-    """Run the game loop for a room
+    # capture check: only the allowed player can capture this trial’s star
+    capturer = board.get("capturer")  # "R" or "B"
+    mover_is_R = (me is board["players"][0])
+    if me["pos"] == board["target"] and ((capturer == "R" and mover_is_R) or (capturer == "B" and not mover_is_R)):
+        board["winner"] = me["id"]
+        _save_board(room_code, board, r)
+        # advance to next trial
+        _advance_trial(room_code, reason="captured", sio=globals().get("socketio"))
+        return board
 
-    Args:
-        room: Game room instance
-        socketio: Socket.IO instance for communication
-    """
-    logger.info(f"Starting game loop for room {room.room_code}")
-
-    # Make sure the game engine and UI are initialized
-    if not room.engine or not room.ui:
-        logger.error(f"ERROR: Engine or UI not initialized for room {room.room_code}")
-        room.active = False
-        return
-
-    try:
-        # Initialize frame counter for debugging
-        frame_count = 0
-        last_state = None
-
-        # Run the game loop as long as the room is active and the engine is running
-        while room.active and room.engine and room.engine.isActive():
-            # Tick the game engine
-            try:
-                room.engine.tick()
-
-                # Get current state for logging
-                current_state = room.engine.getEngineState()
-                if current_state != last_state:
-                    logger.info(f"Game state changed in room {room.room_code}: {current_state}")
-                    last_state = current_state
-
-                # Update the UI
-                room.ui.flip()
-
-                # Print debug info every 100 frames
-                frame_count += 1
-                if frame_count % 100 == 0:
-                    player0_pos = room.engine.getPlayerPosition(0)
-                    player1_pos = room.engine.getPlayerPosition(1)
-                    target_pos = room.engine.getTargetPosition()
-                    logger.debug(f"Frame {frame_count}: P0={player0_pos}, P1={player1_pos}, Target={target_pos}")
-
-                # Throttle the loop to around 20 FPS
-                socketio.sleep(config.TICK_RATE)
-            except Exception as e:
-                logger.exception(f"Error in game loop tick for room {room.room_code}: {e}")
-                socketio.sleep(1)  # Sleep longer on error
-
-    except Exception as e:
-        logger.exception(f"Fatal error in game loop for room {room.room_code}: {e}")
-        room.active = False
-
-    logger.info(f"Game loop ended for room {room.room_code}")
-
-    # Notify clients that the game has ended
-    socketio.emit('game_ended', {'message': 'Game has ended'}, to=room.room_code)
+    _save_board(room_code, board, r)
+    return board
