@@ -33,9 +33,7 @@
     username: "{{ username if username is defined else '' }}"
   };
 </script>
-
-<!-- If not already in base.html, include Socket.IO client below -->
-<!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script> -->
-
+<!-- canvas & markup here -->
 <script type="module" src="{{ url_for('static', filename='js/pages/gamePage.js') }}"></script>
+
 {% endblock %}

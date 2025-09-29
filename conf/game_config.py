@@ -10,13 +10,15 @@ GAME_CONFIG = {
             },
             "target": [2, 1],
             "capturer": "R",   # only R can capture; B blocks
-            "time_limit_sec": 20,
+            "time_limit_sec": 20000,
+            'turn':'R'
         },
         {
             "start_positions": { "R": [3, 0], "B": [0, 3] },
             "target": [1, 2],
             "capturer": "B",
-            "time_limit_sec": 20,
+            "time_limit_sec": 20000,
+            'turn':'B'
         },
         # add more trials...
     ]

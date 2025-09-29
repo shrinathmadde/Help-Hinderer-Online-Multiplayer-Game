@@ -20,7 +20,7 @@ def create_app():
     app = Flask(__name__)
     app.config['SECRET_KEY'] = config.SECRET_KEY
     # Initialize Socket.IO
-    socketio = SocketIO(app, cors_allowed_origins=config.CORS_ALLOWED_ORIGINS)
+    socketio = SocketIO(app, async_mode='threading', cors_allowed_origins=config.CORS_ALLOWED_ORIGINS)
 
     # Import services first (order matters to avoid circular imports)
     from services import room_service, game_service

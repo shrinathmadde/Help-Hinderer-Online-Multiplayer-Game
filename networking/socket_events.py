@@ -16,33 +16,12 @@ socketio = None
 room_service = None
 game_service = None
 
+
 def init_socket_events(socket_io, room_svc=None, game_svc=None):
-    """Initialize Socket.IO event handlers
-
-    Args:
-        socket_io: Socket.IO instance
-        room_svc: Room service instance
-        game_svc: Game service instance
-    """
-    global socketio, room_service, game_service
-    socketio = socket_io
-
-    # Set services if provided
-    if room_svc:
-        room_service = room_svc
-    if game_svc:
-        game_service = game_svc
-
-    # Import and set socketio in network_ui module
-    from networking import network_ui
-    network_ui.socketio = socket_io
-
-    logger.info("Socket.IO event handlers initialized")
-
-
-def register_handlers():
     """Register Socket.IO event handlers"""
-
+    global socketio, room_service, game_service
+    socketio, room_service, game_service = socket_io, room_svc, game_svc
+    
     @socketio.on('connect')
     def handle_connect():
         """Handle client connection"""
@@ -88,11 +67,7 @@ def register_handlers():
 
     @socketio.on('join_game')
     def handle_join_game(data):
-        """Handle player joining a game room
-
-        Args:
-            data: Event data with room_code and player_id
-        """
+        """Handle player joining a game room"""
         room_code = data.get('room_code')
         player_id = data.get('player_id')
 
@@ -116,11 +91,8 @@ def register_handlers():
             emit('error', {'message': 'Player not in this room'})
             return
 
-        # Add socket ID to player's data for tracking
-        if 'sids' not in room.players[player_id]:
-            room.players[player_id]['sids'] = []
-
-        # Only add the socket ID if not already registered
+        # Track this socket id for the player
+        room.players.setdefault(player_id, {}).setdefault('sids', [])
         if request.sid not in room.players[player_id]['sids']:
             room.players[player_id]['sids'].append(request.sid)
 
@@ -128,26 +100,37 @@ def register_handlers():
         join_room(room_code)
         logger.info(f"Player {player_id} joined Socket.IO room {room_code}")
 
-        # Notify others that player joined
+        # Notify others in the room (not the joiner)
         player_info = room.players[player_id]
-        logger.debug(f"Player info: {player_info}")
+        # emit('player_joined', {
+        #     'player_id': player_id,
+        #     'username': player_info['username'],
+        #     'player_number': player_info.get('player_number'),
+        #     'moderator': player_info.get('moderator', False)
+        # }, to=room_code, include_self=False)
 
-        # Emit to everyone in the room EXCEPT the joining player
-        emit('player_joined', {
-            'player_id': player_id,
-            'username': player_info['username'],
-            'player_number': player_info.get('player_number'),
-            'moderator': player_info.get('moderator', False)
-        }, to=room_code, include_self=False)
+        # ---- NEW: compute current trial id + object from the GameRoom snapshot ----
+        try:
+            current_trial_index = int(getattr(room, "current_trial_index", 0) or 0)
+        except Exception:
+            current_trial_index = 0
 
-        # Send room state to the player who just joined
+        trials = list(getattr(room, "trials", []) or [])
+        # current_trial = trials[current_trial_index] if 0 <= current_trial_index < len(trials) else None
+
+        # Send room metadata to the joiner, with trial info included
         emit('room_state', {
             'room': room.to_dict(),
-            'game_started': room.started
-        })
+            'game_started': room.started,
+            # ---- NEW fields ----
+            'current_trial_index': current_trial_index,
+            'trials': trials,
+            'trials_total': len(trials),
+        }, to=room_code, include_self=True)
 
-        logger.info(f"Sent room state to player {player_id}")
-
+        logger.info(
+            f"has_trial={trials is not None}) to player {player_id}"
+        )
     @socketio.on('start_game')
     def handle_start_game(data):
         """Handle game start request
@@ -161,7 +144,6 @@ def register_handlers():
         logger.info(f"Start game request received: room={room_code}, player={player_id}")
 
         result = game_service.start_game(room_code, player_id)
-
         if not result['success']:
             emit('error', {'message': result['message']})
             return
@@ -169,9 +151,8 @@ def register_handlers():
         # Start the game loop in the background
         room = room_service.get_room(room_code)
         if room:
-            socketio.start_background_task(game_service.run_game_loop, room, socketio)
-            # Notify all players that the game has started
-            socketio.emit('game_start', {}, to=room_code)
+            logger.info(f"Start game started")
+            socketio.emit('game_start',to=room_code)
 
     @socketio.on('player_ready')
     def handle_player_ready(data):
@@ -196,51 +177,3 @@ def register_handlers():
                 'room': room.to_dict(),
                 'game_started': room.started
             }, to=room_code)
-
-    @socketio.on('player_move')
-    def handle_player_move(data):
-        """Handle player movement event
-
-        Args:
-            data: Event data with room_code, player_id, direction, and special
-        """
-        room_code = data.get('room_code')
-        player_id = data.get('player_id')
-        direction = data.get('direction')
-        special = data.get('special')
-
-        game_service.process_player_input(room_code, player_id, direction, special)
-
-    @socketio.on('key_down')
-    def handle_key_down(data):
-        """Handle key press event
-
-        Args:
-            data: Event data with room_code, player_id, and key
-        """
-        room_code = data.get('room_code')
-        player_id = data.get('player_id')
-        key = data.get('key')
-
-        if not room_code or not player_id or not key:
-            return
-
-        game_service.process_key_down(room_code, player_id, key)
-
-    @socketio.on('key_up')
-    def handle_key_up(data):
-        """Handle key release event
-
-        Args:
-            data: Event data with room_code, player_id, and key
-        """
-        room_code = data.get('room_code')
-        player_id = data.get('player_id')
-        key = data.get('key')
-
-        if not room_code or not player_id or not key:
-            return
-
-        game_service.process_key_up(room_code, player_id, key)
-
-    logger.info("Socket.IO event handlers registered")

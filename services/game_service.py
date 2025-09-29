@@ -1,129 +1,134 @@
 # services/game_service.py
 import json, time, logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
-from services.redis_client import get_redis          # <- ensure you have a getter (or your redis_client)
-from services.room_service import get_room, save_room, promote_to_live
-from services import game_config                     # <- holds GAME_CONFIG
+from services.redis_client import get_redis          # client instance (NOT a function)
+from services.room_service import get_room, save_room
+from conf import game_config
 import config
 
 logger = logging.getLogger(__name__)
 
-# ---- Redis keys for this feature ----
-def _k_trials(code: str):       return f"room:{code}:trials"
-def _k_trial_idx(code: str):    return f"room:{code}:trial_index"
-def _k_board(code: str):        return f"room:{code}:board"
-def _k_deadline(code: str):     return f"room:{code}:trial_deadline"
+
+
+# services/game_service.py
+_socketio = None
+def set_socketio(sio):  # call once at startup
+    global _socketio
+    _socketio = sio
+
+def _emit(event, payload, room_code):
+    if _socketio:
+        _socketio.emit(event, payload, to=room_code)
+
+
+
+# ----------------------- Redis Keys -----------------------
+def _k_trials(code: str)    -> str: return f"room:{code}:trials"
+def _k_trial_idx(code: str) -> str: return f"room:{code}:trial_index"
+def _k_positions(code: str) -> str: return f"room:{code}:positions"      # positions-only JSON
+def _k_deadline(code: str)  -> str: return f"room:{code}:trial_deadline"
 
 def _r(r=None):
-    """Return a Redis client; accept an override for testability."""
-    return r or get_redis
-# ---- Helpers to read/write trials meta ----
+    return r or get_redis   # get_redis is already a StrictRedis client in your project
+
+# ----------------------- R/W helpers -----------------------
 def _store_trials(room_code: str, trials: List[dict], r=None):
-    r = _r(r)
-    r.set(_k_trials(room_code), json.dumps(trials))
+    r = _r(r); r.set(_k_trials(room_code), json.dumps(trials))
 
 def _load_trials(room_code: str, r=None) -> Optional[List[dict]]:
-    r = _r(r)
-    raw = r.get(_k_trials(room_code))
+    r = _r(r); raw = r.get(_k_trials(room_code))
     return json.loads(raw) if raw else None
 
 def _set_trial_idx(room_code: str, idx: int, r=None):
-    r = _r(r)
-    r.set(_k_trial_idx(room_code), str(idx))
+    r = _r(r); r.set(_k_trial_idx(room_code), str(idx))
 
 def _get_trial_idx(room_code: str, r=None) -> int:
-    r = _r(r)
-    raw = r.get(_k_trial_idx(room_code))
+    r = _r(r); raw = r.get(_k_trial_idx(room_code))
     return int(raw) if raw is not None else 0
 
-def _save_board(room_code: str, board: dict, r=None):
-    r = _r(r)
-    r.set(_k_board(room_code), json.dumps(board))
+def _save_positions(room_code: str, positions: dict, r=None):
+    r = _r(r); r.set(_k_positions(room_code), json.dumps(positions))
 
-def _load_board(room_code: str, r=None) -> Optional[dict]:
-    r = _r(r)
-    raw = r.get(_k_board(room_code))
+def _load_positions(room_code: str, r=None) -> Optional[dict]:
+    r = _r(r); raw = r.get(_k_positions(room_code))
     return json.loads(raw) if raw else None
 
 def _set_deadline(room_code: str, ts: float, r=None):
-    r = _r(r)
-    r.set(_k_deadline(room_code), str(int(ts)))
+    r = _r(r); r.set(_k_deadline(room_code), str(int(ts)))
 
 def _get_deadline(room_code: str, r=None) -> Optional[int]:
-    r = _r(r)
-    raw = r.get(_k_deadline(room_code))
+    r = _r(r); raw = r.get(_k_deadline(room_code))
     return int(raw) if raw else None
 
-# ---- Trial/board initialization ----
-def _player_map(room, max_players=2) -> Dict[int, str]:
-    """Create {0: player_id_for_R, 1: player_id_for_B} from room.players."""
-    mapping = {}
-    # your room stores players as dict; pick any two non-moderators by their assigned player_number if present
-    for pid, pdata in room.players.items():
-        if pdata.get('moderator'): 
-            continue
-        pn = pdata.get('player_number')
-        if pn in (0, 1):
-            mapping[pn] = pid
-        # fallback if no player_number assigned: fill in order
-        if 'player_number' not in pdata and len(mapping) < 2:
-            mapping[len(mapping)] = pid
-    return mapping
-
-def _init_board_from_trial(room_code: str, trial: dict, room) -> dict:
-    """Build the authoritative board for this trial and save it."""
-    pm = _player_map(room)
-    # trial.start_positions has "R" and "B" → map to player indexes 0/1
-    start = trial["start_positions"]
-    board = {
-        "size": game_config.GAME_CONFIG.get("board_size", 4),
-        "players": [
-            {"id": pm.get(0), "username": room.players.get(pm.get(0), {}).get("username"), "pos": start["R"], "color": "red"},
-            {"id": pm.get(1), "username": room.players.get(pm.get(1), {}).get("username"), "pos": start["B"], "color": "blue"},
-        ],
-        "target": trial["target"],
-        "capturer": trial["capturer"],  # "R" or "B"
-        "winner": None,
-    }
-    _save_board(room_code, board)
-    return board
-
+# ----------------------- Utils -----------------------
 def _emit(sio, event: str, payload: dict, room_code: str):
     if sio:
         sio.emit(event, payload, to=room_code)
 
+def _player_map_RB(room) -> Dict[str, Optional[str]]:
+    """
+    Return {"R": player_id_for_red, "B": player_id_for_blue}.
+    Uses room.players; expects players to have player_number 0/1 or fills by order.
+    """
+    red_id = blue_id = None
+    # first pass: assigned numbers
+    for pid, pdata in room.players.items():
+        if pdata.get('moderator'):
+            continue
+        pn = pdata.get('player_number')
+        if pn == 0:
+            red_id = pid
+        elif pn == 1:
+            blue_id = pid
+    # fallback: fill by encounter
+    for pid, pdata in room.players.items():
+        if pdata.get('moderator'):
+            continue
+        if red_id is None:
+            red_id = pid; continue
+        if blue_id is None and pid != red_id:
+            blue_id = pid
+            break
+    return {"R": red_id, "B": blue_id}
+
+
+
+
+# ----------------------- Trial control -----------------------
 def _start_trial(room_code: str, idx: int, sio=None):
     r = _r()
     trials = _load_trials(room_code, r) or []
     if idx >= len(trials):
-        # no more trials
         _emit(sio, "game_over", {"message": "All trials finished"}, room_code)
         return None
 
     room = get_room(room_code)
     trial = trials[idx]
-    board = _init_board_from_trial(room_code, trial, room)
+    positions, ids = None,None
 
-    # set deadline
+    # deadline
     deadline = int(time.time()) + int(trial.get("time_limit_sec", 20))
     _set_deadline(room_code, deadline, r)
     _set_trial_idx(room_code, idx, r)
 
-    # broadcast start (reuse GAME_START for each trial)
-    _emit(sio, "game_start", {
+    # Broadcast start (positions-only). Include ids mapping so clients know their role.
+    payload = {
         "trial_index": idx,
         "trial_total": len(trials),
-        "board": board,
+        "positions": positions,
+        "turn": positions["turn"],
+        "ids": ids,                    # clients can map player_id -> 'R'/'B'
         "deadline": deadline,
-    }, room_code)
+    }
+    # _emit(sio, "game_start", payload, room_code)
 
-    # optional: background timer to auto-advance when time runs out
-    bg = globals().get("socketio", None)
-    if bg:
-        bg.start_background_task(_trial_timer_task, room_code)
+    # # Optional: background timer
+    # bg = globals().get("socketio", None)
+    # if bg:
+    #     bg.start_background_task(_trial_timer_task, room_code)
 
-    return board
+    return payload
 
 def _trial_timer_task(room_code: str):
     sio = globals().get("socketio", None)
@@ -134,10 +139,8 @@ def _trial_timer_task(room_code: str):
             return
         now = int(time.time())
         if now >= deadline:
-            # time’s up → advance
             _advance_trial(room_code, reason="timeout", sio=sio)
             return
-        # sleep a bit
         if sio:
             sio.sleep(1)
         else:
@@ -150,7 +153,6 @@ def _advance_trial(room_code: str, reason: str, sio=None):
     if idx >= len(trials):
         return
 
-    # notify completion
     _emit(sio, "trial_complete", {"trial_index": idx, "reason": reason}, room_code)
 
     next_idx = idx + 1
@@ -160,7 +162,7 @@ def _advance_trial(room_code: str, reason: str, sio=None):
 
     _start_trial(room_code, next_idx, sio)
 
-# ---- PUBLIC API you already call in sockets ----
+# ----------------------- Public API -----------------------
 def start_game(room_code: str, player_id: str) -> Dict[str, Any]:
     room_code = room_code.upper()
     room = get_room(room_code)
@@ -175,46 +177,92 @@ def start_game(room_code: str, player_id: str) -> Dict[str, Any]:
         return {"success": False, "message": f"Need {room.max_players} players to start (currently {len(real_players)})"}
 
     if room.start_game():
-        save_room(room)
-        promote_to_live(room)
-
-        # NEW: load trials from config and persist under room code
-        trials = game_config.GAME_CONFIG.get("trials", [])
-        _store_trials(room_code, trials)
-
-        # Kick off trial #0 (sets board + deadline in Redis and emits GAME_START)
-        _start_trial(room_code, 0, sio=globals().get("socketio"))
         return {"success": True, "message": "Game started successfully"}
 
     return {"success": False, "message": "Failed to start game"}
 
-def apply_move_and_maybe_advance(room_code: str, player_id: str, dx: int, dy: int):
-    """Called by your socket handler on each BOARD_UPDATE intent."""
-    r = _r()
-    board = _load_board(room_code, r)
-    if not board:
-        return None
+# ----------------------- Movement & Persistence -----------------------
 
-    # find mover
-    me = next((p for p in board["players"] if p["id"] == player_id), None)
-    if not me:
-        return board
+# services/game_service.py
+def mark_player_ready(room_code: str, player_id: str) -> bool:
+    """
+    Mark a player as ready. If all real (non-moderator) players are ready and the room is full,
+    auto-start the game using the moderator id.
+    """
+    room_code = room_code.upper()
+    room = get_room(room_code)
+    if not room:
+        logger.warning(f"[ready] room not found: {room_code}")
+        return False
+    if player_id not in room.players:
+        logger.warning(f"[ready] player not in room: {player_id} / {room_code}")
+        return False
 
-    size = board["size"]
-    x, y = me["pos"]
-    nx = max(0, min(size - 1, x + dx))
-    ny = max(0, min(size - 1, y + dy))
-    me["pos"] = [nx, ny]
+    # flag ready
+    pdata = room.players[player_id] or {}
+    pdata["ready"] = True
+    room.players[player_id] = pdata
+    save_room(room)
 
-    # capture check: only the allowed player can capture this trial’s star
-    capturer = board.get("capturer")  # "R" or "B"
-    mover_is_R = (me is board["players"][0])
-    if me["pos"] == board["target"] and ((capturer == "R" and mover_is_R) or (capturer == "B" and not mover_is_R)):
-        board["winner"] = me["id"]
-        _save_board(room_code, board, r)
-        # advance to next trial
-        _advance_trial(room_code, reason="captured", sio=globals().get("socketio"))
-        return board
+    return True
 
-    _save_board(room_code, board, r)
-    return board
+
+# services/game_service.py
+from typing import Any, Dict, Optional
+import json
+
+def _get_positions(room_code: str, r=None) -> Dict[str, Any]:
+    """Return authoritative positions dict: {'R':[x,y], 'B':[x,y], 'size':int, 'capturer':'R'|'B', 'turn':'R'|'B'}."""
+    r = r or _r()
+    # PREFERRED: if you already have a helper, use it here (replace this function).
+    # Common patterns (uncomment the one you actually use):
+
+    # 1) Single JSON blob
+    raw = r.get(f"game:{room_code}:positions")
+    if raw:
+        return json.loads(raw)
+
+    # 2) Hash fields (R,B,size,capturer,turn)
+    h = r.hgetall(f"game:{room_code}:positions")
+    if h:
+        def j(v): 
+            try: return json.loads(v) 
+            except Exception: return v
+        pos = {k.decode(): j(v) for k, v in h.items()}
+        # Ensure lists are lists (not strings)
+        for k in ("R", "B"):
+            if isinstance(pos.get(k), str):
+                try: pos[k] = json.loads(pos[k])
+                except Exception: pass
+        return pos
+
+    return {}  # nothing stored yet
+
+
+def _get_ids_map(room_code: str, r=None) -> Optional[Dict[str, str]]:
+    """Return {'R': <player_id>, 'B': <player_id>} if available."""
+    r = r or _r()
+    raw = r.get(f"game:{room_code}:ids")
+    if raw:
+        return json.loads(raw)
+
+    # If you don't store ids separately, you can derive from the Room if roles are saved there.
+    room = get_room(room_code)
+    if room:
+        # Example if you store role on each player: pdata['role'] in {'R','B'}
+        mapping = {}
+        for pid, pdata in room.players.items():
+            role = (pdata or {}).get("role")
+            if role in ("R", "B"):
+                mapping[role] = pid
+        if mapping:
+            return mapping
+
+    return None
+
+
+
+
+
+
+

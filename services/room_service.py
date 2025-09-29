@@ -13,8 +13,7 @@ from services.redis_client import get_redis  # NEW
 logger = logging.getLogger(__name__)
 
 # In-process map for live Engine/UI (optional for now; used only after start_game)
-# Keyed by room_code; values are GameRoom objects with engine/ui attached
-_local_live_rooms: Dict[str, GameRoom] = {}
+
 
 def _redis_key(room_code: str) -> str:
     return f"room:{room_code.upper()}"
@@ -45,11 +44,6 @@ def _get_meta(room_code: str) -> Optional[dict]:
 
 def get_room(room_code: str) -> Optional[GameRoom]:
     room_code = room_code.upper()
-
-    # If we have a local "live" room (engine running), prefer it
-    if room_code in _local_live_rooms:
-        return _local_live_rooms[room_code]
-
     meta = _get_meta(room_code)
     if not meta:
         return None
@@ -85,9 +79,7 @@ def join_room(room_code: str, username: str) -> Tuple[bool, str, str]:
 
 def remove_player(room_code: str, player_id: str) -> bool:
     room_code = room_code.upper()
-
-    # Prefer local live room if available
-    room = _local_live_rooms.get(room_code)
+    
     if not room:
         meta = _get_meta(room_code)
         if not meta:
@@ -104,11 +96,6 @@ def remove_player(room_code: str, player_id: str) -> bool:
 
 def remove_room(room_code: str) -> bool:
     room_code = room_code.upper()
-
-    # Stop local engine/UI if present
-    if room_code in _local_live_rooms:
-        live = _local_live_rooms.pop(room_code)
-        live.active = False  # signal loop to stop
 
     return bool(get_redis.delete(_redis_key(room_code)))
 
@@ -127,8 +114,3 @@ def cleanup_inactive_rooms() -> int:
             if remove_room(code):
                 removed += 1
     return removed
-
-# Helper (used by game_service after start_game)
-def promote_to_live(room: GameRoom) -> None:
-    """Keep a local reference for running engine/UI for this process."""
-    _local_live_rooms[room.room_code] = room

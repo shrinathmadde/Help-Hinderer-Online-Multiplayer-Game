@@ -22,7 +22,7 @@ def init_routes(app: Flask, socketio: SocketIO):
 
     # Make socketio available to services (like game_service)
     import services.game_service as game_service
-    game_service.socketio = socketio
+    game_service.set_socketio(socketio)
 
     # Initialize game routes
     init_game_routes(app)
@@ -31,3 +31,4 @@ def init_routes(app: Flask, socketio: SocketIO):
     init_api_routes(app, socketio)
 
     logger.info("Routes initialization complete")
+    

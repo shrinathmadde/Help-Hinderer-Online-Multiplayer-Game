@@ -1,267 +1,83 @@
-<!-- templates/waiting.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Waiting for Game to Start</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <style>
-        .waiting-container {
-            text-align: center;
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 2rem;
-        }
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Waiting for Game to Start</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}"/>
 
-        .players-list {
-            margin: 2rem 0;
-            padding: 1rem;
-            background-color: #f5f5f5;
-            border-radius: 8px;
-        }
-
-        .player-item {
-            padding: 0.5rem;
-            margin: 0.5rem 0;
-            background-color: #e0e0e0;
-            border-radius: 4px;
-        }
-
-        .room-code {
-            font-size: 2rem;
-            font-weight: bold;
-            margin: 1rem 0;
-            padding: 0.5rem;
-            background-color: #f0f0f0;
-            border-radius: 4px;
-            display: inline-block;
-        }
-
-        .start-btn {
-            margin-top: 2rem;
-        }
-
-        .hidden {
-            display: none;
-        }
-
-        #debug-area {
-            margin-top: 2rem;
-            text-align: left;
-            border: 1px solid #ddd;
-            padding: 1rem;
-            background-color: #f9f9f9;
-            border-radius: 4px;
-            font-family: monospace;
-            white-space: pre-wrap;
-        }
-    </style>
+  <style>
+    .waiting-container {
+      text-align: center;
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    .players-list {
+      margin: 2rem 0;
+      padding: 1rem;
+      background-color: #f5f5f5;
+      border-radius: 8px;
+    }
+    .player-item {
+      padding: 0.5rem;
+      margin: 0.5rem 0;
+      background-color: #e0e0e0;
+      border-radius: 4px;
+    }
+    .room-code {
+      font-size: 2rem;
+      font-weight: bold;
+      margin: 1rem 0;
+      padding: 0.5rem;
+      background-color: #f0f0f0;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    .start-btn { margin-top: 2rem; }
+    .hidden { display: none; }
+    #debug-area {
+      margin-top: 2rem;
+      text-align: left;
+      border: 1px solid #ddd;
+      padding: 1rem;
+      background-color: #f9f9f9;
+      border-radius: 4px;
+      font-family: monospace;
+      white-space: pre-wrap;
+    }
+  </style>
 </head>
-<body>
-    <div class="container waiting-container">
-        <h1>Waiting Room</h1>
 
-        <div class="card">
-            <h2>Room Code:</h2>
-            <div class="room-code">{{ room_code }}</div>
-            <p>Share this code with other players to join the game</p>
+<!-- Expose the room code to JS via data attribute -->
+<body data-room-code="{{ room_code }}">
+  <div class="container waiting-container">
+    <h1>Waiting Room</h1>
 
-            <div class="players-list">
-                <h3>Players in Room:</h3>
-                <div id="players-list">
-                    <!-- Players will be populated by JavaScript -->
-                    <div class="player-item">Waiting for players to join...</div>
-                </div>
-            </div>
+    <div class="card">
+      <h2>Room Code:</h2>
+      <div class="room-code">{{ room_code }}</div>
+      <p>Share this code with other players to join the game</p>
 
-            <button id="start-game-btn" class="btn hidden">Start Game</button>
-            <button id="ready-btn" class="btn">I'm Ready</button>
-            <button id="leave-room-btn" class="btn btn-secondary" onclick="window.location.href='/'">Leave Room</button>
+      <div class="players-list">
+        <h3>Players in Room:</h3>
+        <div id="players-list">
+          <!-- Players will be populated by JavaScript -->
+          <div class="player-item">Waiting for players to join...</div>
         </div>
+      </div>
 
-        <div id="debug-area" class="hidden"></div>
+      <button id="start-game-btn" class="btn hidden">Start Game</button>
+      <button id="ready-btn" class="btn">I'm Ready</button>
+      <button id="leave-room-btn" class="btn btn-secondary" onclick="window.location.href='/'">Leave Room</button>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const roomCode = '{{ room_code }}';
-            const playerId = localStorage.getItem('player_id');
-            const username = localStorage.getItem('username');
-            const playersList = document.getElementById('players-list');
-            const startGameBtn = document.getElementById('start-game-btn');
-            const readyBtn = document.getElementById('ready-btn');
-            const debugArea = document.getElementById('debug-area');
+    <div id="debug-area" class="hidden"></div>
+  </div>
 
-            // Debug function
-            function debug(message) {
-                console.log(message);
-                if (debugArea) {
-                    const time = new Date().toLocaleTimeString();
-                    debugArea.textContent += `[${time}] ${message}\n`;
-                    debugArea.scrollTop = debugArea.scrollHeight;
-                }
-            }
-
-            // Press 'd' to show debug area
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'd' && e.ctrlKey) {
-                    debugArea.classList.toggle('hidden');
-                }
-            });
-
-            // Display a message if debug is already in the URL
-            if (window.location.search.includes('debug')) {
-                debugArea.classList.remove('hidden');
-            }
-
-            debug(`Room code: ${roomCode}`);
-            debug(`Player ID: ${playerId}`);
-            debug(`Username: ${username}`);
-
-            // Make sure we have the needed information
-            if (!playerId || !username) {
-                alert('Missing player information. Returning to home page.');
-                window.location.href = '/';
-                return;
-            }
-
-            // Store room code in case we need it
-            localStorage.setItem('room_code', roomCode);
-
-            // Connect to Socket.IO
-            const socket = io();
-
-            socket.on('connect', function() {
-                debug('Connected to Socket.IO');
-
-                // Join the game room
-                socket.emit('join_game', {
-                    room_code: roomCode,
-                    player_id: playerId
-                });
-
-                debug(`Sent join_game event for room ${roomCode}`);
-            });
-
-            socket.on('connect_error', function(error) {
-                debug(`Connection error: ${error.message}`);
-            });
-
-            // Room state update
-            socket.on('room_state', function(data) {
-                debug(`Room state received: ${JSON.stringify(data)}`);
-
-                // Update players list
-                updatePlayersList(data.room.players);
-
-                // Check if player is moderator
-                let isModerator = false;
-                for (const pid in data.room.players) {
-                    if (pid === playerId && data.room.players[pid].moderator) {
-                        isModerator = true;
-                        break;
-                    }
-                }
-
-                debug(`Is moderator: ${isModerator}`);
-
-                // Show/hide start button based on player role
-                if (isModerator) {
-                    startGameBtn.classList.remove('hidden');
-                } else {
-                    startGameBtn.classList.add('hidden');
-                }
-
-                // If game has already started, redirect to game page
-                if (data.game_started) {
-                    debug('Game already started, redirecting to game page');
-                    window.location.href = '/game/' + roomCode;
-                }
-            });
-
-            // New player joined
-            socket.on('player_joined', function(data) {
-                debug(`Player joined: ${JSON.stringify(data)}`);
-
-                // Check if player is already in list
-                const existingPlayer = document.querySelector(`[data-player-id="${data.player_id}"]`);
-                if (!existingPlayer) {
-                    const playerItem = document.createElement('div');
-                    playerItem.classList.add('player-item');
-                    playerItem.dataset.playerId = data.player_id;
-                    playerItem.textContent = data.username + (data.player_id === playerId ? ' (You)' : '');
-                    playersList.appendChild(playerItem);
-                }
-            });
-
-            // Game start event
-            socket.on('game_start', function() {
-                debug('Game is starting, redirecting to game page');
-                window.location.href = '/game/' + roomCode;
-            });
-
-            // Error event
-            socket.on('error', function(data) {
-                debug(`Error received: ${JSON.stringify(data)}`);
-                alert(`Error: ${data.message}`);
-            });
-
-            // Ready button handler
-            readyBtn.addEventListener('click', function() {
-                debug('Sending player_ready event');
-                socket.emit('player_ready', {
-                    room_code: roomCode,
-                    player_id: playerId
-                });
-
-                readyBtn.disabled = true;
-                readyBtn.textContent = "Ready ✓";
-            });
-
-            // Start game button handler (for moderator only)
-            startGameBtn.addEventListener('click', function() {
-                debug('Sending start_game event');
-                socket.emit('start_game', {
-                    room_code: roomCode,
-                    player_id: playerId
-                });
-            });
-
-            // Helper function to update players list
-            function updatePlayersList(players) {
-                debug(`Updating players list: ${JSON.stringify(players)}`);
-                playersList.innerHTML = '';
-
-                let playerCount = 0;
-
-                for (const pid in players) {
-                    const player = players[pid];
-                    debug(`Processing player: ${JSON.stringify(player)}`);
-
-                    // Skip moderator in the players list display
-                    if (player.moderator) {
-                        debug('Skipping moderator in display');
-                        continue;
-                    }
-
-                    playerCount++;
-                    const playerItem = document.createElement('div');
-                    playerItem.classList.add('player-item');
-                    playerItem.dataset.playerId = pid;
-                    playerItem.textContent = player.username + (pid === playerId ? ' (You)' : '');
-                    playersList.appendChild(playerItem);
-                }
-
-                if (playerCount === 0) {
-                    const emptyItem = document.createElement('div');
-                    emptyItem.classList.add('player-item');
-                    emptyItem.textContent = 'Waiting for players to join...';
-                    playersList.appendChild(emptyItem);
-                }
-            }
-        });
-    </script>
+  <!-- Socket.IO client -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+  <!-- Your page script -->
+  <script defer src="{{ url_for('static', filename='js/pages/waiting.js') }}"></script>
 </body>
 </html>

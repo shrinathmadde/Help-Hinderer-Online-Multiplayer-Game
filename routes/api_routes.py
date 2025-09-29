@@ -4,7 +4,7 @@ API routes for the application
 import logging
 from flask import Blueprint, request, jsonify
 
-from services import room_service, game_service, board_service
+from services import room_service, game_service
 
 logger = logging.getLogger(__name__)
 

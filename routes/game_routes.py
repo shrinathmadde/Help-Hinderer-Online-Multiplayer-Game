@@ -48,7 +48,7 @@ def game(room_code):
                                home_link=True), 404
 
     # Check if the room has started
-    if not room.started:
+    if not room.start_game():
         logger.info(f"Room {room_code} exists but game has not started. Redirecting to waiting page.")
         return redirect(url_for('game.waiting', room_code=room_code))
 

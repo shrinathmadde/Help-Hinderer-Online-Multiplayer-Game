@@ -26,11 +26,28 @@ class GameRoom:
         self.ui = None
         self.playerInput = None
 
-        # Import NetworkSaver here to avoid circular import
-        from networking.network_saver import NetworkSaver
-        self.saver = NetworkSaver()
+        # --- NEW: game config snapshot on room creation ---
+        # We read the game config immediately and store:
+        #   - self.trials: full list of trials
+        #   - self.current_trial_index: index of the active trial (starts at 0)
+        self.trials: List[dict] = []
+        self.current_trial_index: int = 0
+        try:
+            # Import here to avoid unexpected import cycles
+            from conf import game_config  # contains GAME_CONFIG
+            cfg = getattr(game_config, "GAME_CONFIG", {}) or {}
+            trials = cfg.get("trials", [])
+            # Make a shallow copy so room has its own snapshot
+            self.trials = list(trials) if isinstance(trials, list) else []
+            self.current_trial_index = 0
+            # logger.info(
+            #     f"[{self.room_code}] Loaded game config: {len(self.trials)} trials; current_trial_index set to 0"
+            # )
+        except Exception as e:
+            logger.exception(f"[{self.room_code}] Failed to load GAME_CONFIG trials: {e}")
+            # leave trials empty and index 0; game_service can still populate later if needed
 
-        logger.info(f"Created game room {room_code} with max {max_players} players")
+        # logger.info(f"Created game room {room_code} with max {max_players} players")
 
     def add_player(self, player_id: str, username: str, is_moderator: bool = False) -> bool:
         """Add a player to the room
@@ -73,38 +90,22 @@ class GameRoom:
         return True
 
     def is_full(self) -> bool:
-        """Check if the room has reached maximum capacity
-
-        Returns:
-            bool: True if room is full, False otherwise
-        """
+        """Check if the room has reached maximum capacity"""
         real_players = [pid for pid, pdata in self.players.items() if not pdata.get('moderator', False)]
         return len(real_players) >= self.max_players
 
     def is_empty(self) -> bool:
-        """Check if the room has no players
-
-        Returns:
-            bool: True if room is empty, False otherwise
-        """
+        """Check if the room has no players"""
         return len(self.players) == 0
 
     def remove_player(self, player_id: str) -> bool:
-        """Remove a player from the room
-
-        Args:
-            player_id: ID of player to remove
-
-        Returns:
-            bool: True if player was removed, False if player was not found
-        """
+        """Remove a player from the room"""
         if player_id in self.players:
             is_moderator = self.players[player_id].get('moderator', False)
 
             logger.info(f"Removing player {player_id} from room {self.room_code}")
             del self.players[player_id]
 
-            # If moderator left, find a new moderator or mark room for cleanup
             if is_moderator and self.moderator_id == player_id:
                 self.moderator_id = None
                 # Try to promote another player to moderator
@@ -114,7 +115,6 @@ class GameRoom:
                     logger.info(f"Promoted player {pid} to moderator")
                     break
 
-            # If non-moderator left, reassign player numbers
             if not is_moderator:
                 # Reassign player numbers to ensure 0 and 1 are used
                 real_players = [pid for pid, pdata in self.players.items() if not pdata.get('moderator', False)]
@@ -125,55 +125,47 @@ class GameRoom:
 
             return True
         return False
-    def start_game(self) -> bool:
-        """Initialize and start the game
 
-        Returns:
-            bool: True if game started successfully, False otherwise
+    def start_game(self) -> bool:
+        """Initialize and start the game.
+        Returns True if started, False otherwise.
         """
-        real_players = [pid for pid, pdata in self.players.items() if not pdata.get('moderator', False)]
+        real_players = [pdata for pid, pdata in self.players.items() if not pdata.get("moderator", False)]
+
+        # 1. Check if the expected number of players is present
         if len(real_players) < self.max_players:
-            logger.warning(f"Cannot start game. Not enough players: {len(real_players)}/{self.max_players}")
+            logger.warning(
+                f"Cannot start game in room {self.room_code}. Not enough players: "
+                f"{len(real_players)}/{self.max_players}"
+            )
             return False
 
+        # 2. Check readiness of all non-moderator players
+        not_ready = [pdata["username"] for pdata in real_players if not pdata.get("ready", False)]
+        if not_ready:
+            logger.warning(
+                f"Cannot start game in room {self.room_code}. Players not ready: {not_ready}"
+            )
+            return False
+
+        # 3. All conditions met → start the game
         self.started = True
-
-        # Import these here to avoid circular import
-        from networking.network_input import NetworkPlayerInput
-        from networking.network_ui import NetworkUI
-        from backend.engine import EngineImpl
-        from backend.block_provider import BlockProviderFromPremade
-        from backend.trial_provider import TrialProviderFromPremade
-        from assets.premade_trials.index import namedPremadeIndex
-        from assets.premade_blocks.test_blocks import premade_test_blocks
-
-        self.playerInput = NetworkPlayerInput()
-        trialProvider = TrialProviderFromPremade(namedPremadeIndex["Practice"])
-        blockProvider = BlockProviderFromPremade(premade_test_blocks)
-
-        logger.info(f"Starting game in room {self.room_code}")
-        self.engine = EngineImpl(
-            blockProvider=blockProvider,
-            playerInput=self.playerInput,
-            saver=self.saver
-        )
-
-        self.ui = NetworkUI(self.engine, self.room_code)
         logger.info(f"Game successfully started in room {self.room_code}")
         return True
 
-    def to_dict(self) -> dict:
-        """Convert room data to a dictionary for JSON serialization
 
-        Returns:
-            dict: Room data as a dictionary
-        """
+    def to_dict(self) -> dict:
+        """Convert room data to a dictionary for JSON serialization"""
         return {
             'room_code': self.room_code,
             'players': self.players,
             'max_players': self.max_players,
-            'started': self.started
+            'started': self.started,
+            # --- NEW (optional to expose in debug/UI): ---
+            'trials_count': len(self.trials),
+            'current_trial_index': self.current_trial_index,
         }
+
     def to_meta(self) -> dict:
         """Serialize only room metadata (no engine/UI)."""
         return {
@@ -183,6 +175,9 @@ class GameRoom:
             "started": self.started,
             "active": self.active,
             "moderator_id": self.moderator_id,
+            # --- NEW: persist config snapshot & pointer ---
+            "trials": self.trials,
+            "current_trial_index": self.current_trial_index,
         }
 
     @staticmethod
@@ -193,5 +188,9 @@ class GameRoom:
         room.started = meta.get("started", False)
         room.active = meta.get("active", True)
         room.moderator_id = meta.get("moderator_id")
-        # engine/ui/playerInput/saver stay as is (None/new saver in __init__)
+
+        # --- NEW: restore config snapshot & pointer ---
+        room.trials = meta.get("trials", [])
+        room.current_trial_index = int(meta.get("current_trial_index", 0))
+
         return room
