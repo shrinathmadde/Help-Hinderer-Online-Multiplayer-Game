@@ -4,8 +4,7 @@ from typing import Optional, Dict, Any, List, Tuple
 
 from services.redis_client import get_redis          # client instance (NOT a function)
 from services.room_service import get_room, save_room
-from conf import game_config
-import config
+
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +258,25 @@ def _get_ids_map(room_code: str, r=None) -> Optional[Dict[str, str]]:
             return mapping
 
     return None
+
+
+from services import room_service
+
+def update_position(room_code: str, player_id: str, dx: int, dy: int):
+    """
+    Update a player's position in the given room.
+    Returns the updated trial dict if successful, else None.
+    """
+    room = room_service.get_room(room_code)
+    if not room:
+        return None
+
+    ok = room.update_player_position(player_id, dx, dy)
+    if not ok:
+        return None
+    save_room(room)
+    return True
+
 
 
 

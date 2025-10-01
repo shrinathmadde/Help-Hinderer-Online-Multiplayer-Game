@@ -107,48 +107,59 @@ function drawInitial() {
   socket.on("room_state", (data) => {
     log("room_state:", data);
 
-    // ---- Step 1: basic room players (optional for meta UI)
-    // updatePlayersList(data.room.players) ... if needed
-
-    // ---- Step 2: derive current trial from index
     const trialIndex = data?.current_trial_index;
     const trials = data?.trials;
     if (typeof trialIndex === "number" && Array.isArray(trials)) {
       const trial = trials[trialIndex];
       if (trial) {
-        // update state from trial config
-        state.size = trial.board_size || state.size; // fallback if missing
+        // update state
+        state.size = trial.board_size || state.size;
         state.positions = { ...trial.start_positions };
         state.target = trial.target;
         state.capturer = trial.capturer;
         state.turn = trial.turn || "R";
 
-        // identify my role if possible
+        // identify my role
         const players = data.room?.players || {};
         const ids = {};
         for (const pid in players) {
-          if (players[pid].role) {
-            ids[players[pid].role] = pid;
-          }
+          if (players[pid].role) ids[players[pid].role] = pid;
         }
         if (PLAYER_ID && (ids.R === PLAYER_ID || ids.B === PLAYER_ID)) {
           state.myRole = ids.R === PLAYER_ID ? "R" : "B";
+        } else {
+          state.myRole = "MOD"; // moderator fallback
         }
 
-        // redraw everything from fresh state
+        // redraw board
         renderer?.clearAndRedrawAll?.();
         drawInitial();
 
         // attach movement controller
         if (movement) movement.destroy();
-        movement = attachMovement({
-          renderer,
+        movement = attachMovement({socket,
           getSnapshot,
           roomCode: ROOM_CODE,
           playerId: PLAYER_ID,
         });
-        if (movement)
-          state.turn === state.myRole ? movement.unlock() : movement.lock();
+
+        // ---- NEW: handle turn display + lock/unlock ----
+        const turnStatusEl = document.getElementById("turnStatus");
+
+        if (state.myRole === "MOD") {
+          // moderator cannot move
+          movement?.lock?.();
+          if (turnStatusEl) turnStatusEl.textContent = "Moderator";
+        } else {
+          if (state.turn === state.myRole) {
+            movement?.unlock?.();
+            if (turnStatusEl) turnStatusEl.textContent = "✅ Your turn";
+          } else {
+            movement?.lock?.();
+            if (turnStatusEl)
+              turnStatusEl.textContent = "⏳ Other player's turn";
+          }
+        }
 
         // label
         const label = document.getElementById("roomLabel");
@@ -160,66 +171,6 @@ function drawInitial() {
       }
     } else {
       log("room_state: no trial data (game not started?)");
-    }
-  });
-
-  // BOARD_UPDATE (authoritative incremental updates)
-  socket.on(EVT.BOARD_UPDATE, (payload) => {
-    log("BOARD_UPDATE payload:", payload);
-
-    // positions
-    if (payload?.positions) {
-      const prevR = state.positions.R;
-      const prevB = state.positions.B;
-      const nextR = payload.positions.R ?? prevR;
-      const nextB = payload.positions.B ?? prevB;
-
-      if (renderer) {
-        if (
-          nextR &&
-          (!prevR || prevR[0] !== nextR[0] || prevR[1] !== nextR[1])
-        ) {
-          if (prevR) renderer.updatePlayer?.("R", nextR);
-          else renderer.setPlayer("R", state.colors.R, nextR);
-        }
-        if (
-          nextB &&
-          (!prevB || prevB[0] !== nextB[0] || prevB[1] !== nextB[1])
-        ) {
-          if (prevB) renderer.updatePlayer?.("B", nextB);
-          else renderer.setPlayer("B", state.colors.B, nextB);
-        }
-      }
-
-      state.positions.R = nextR;
-      state.positions.B = nextB;
-    }
-
-    // target/star changes
-    const nextTarget = payload?.target ?? payload?.star;
-    if (nextTarget) {
-      state.target = nextTarget;
-      if (renderer) {
-        renderer.clearAndRedrawAll?.();
-        renderer.drawBoard?.();
-        renderer.drawTarget(state.target);
-        if (state.positions.R)
-          renderer.setPlayer("R", state.colors.R, state.positions.R);
-        if (state.positions.B)
-          renderer.setPlayer("B", state.colors.B, state.positions.B);
-      }
-    }
-
-    // turn changes
-    if (payload?.turn) {
-      state.turn = payload.turn;
-      if (movement)
-        state.turn === state.myRole ? movement.unlock() : movement.lock();
-    }
-
-    // win/terminal
-    if (payload?.winner) {
-      movement?.lock?.();
     }
   });
 })();

@@ -101,23 +101,12 @@ def init_socket_events(socket_io, room_svc=None, game_svc=None):
         logger.info(f"Player {player_id} joined Socket.IO room {room_code}")
 
         # Notify others in the room (not the joiner)
-        player_info = room.players[player_id]
-        # emit('player_joined', {
-        #     'player_id': player_id,
-        #     'username': player_info['username'],
-        #     'player_number': player_info.get('player_number'),
-        #     'moderator': player_info.get('moderator', False)
-        # }, to=room_code, include_self=False)
-
-        # ---- NEW: compute current trial id + object from the GameRoom snapshot ----
         try:
             current_trial_index = int(getattr(room, "current_trial_index", 0) or 0)
         except Exception:
             current_trial_index = 0
 
         trials = list(getattr(room, "trials", []) or [])
-        # current_trial = trials[current_trial_index] if 0 <= current_trial_index < len(trials) else None
-
         # Send room metadata to the joiner, with trial info included
         emit('room_state', {
             'room': room.to_dict(),
@@ -131,6 +120,7 @@ def init_socket_events(socket_io, room_svc=None, game_svc=None):
         logger.info(
             f"has_trial={trials is not None}) to player {player_id}"
         )
+        
     @socketio.on('start_game')
     def handle_start_game(data):
         """Handle game start request
@@ -153,7 +143,8 @@ def init_socket_events(socket_io, room_svc=None, game_svc=None):
         if room:
             logger.info(f"Start game started")
             socketio.emit('game_start',to=room_code)
-
+        return
+    
     @socketio.on('player_ready')
     def handle_player_ready(data):
         """Handle player ready event
@@ -177,3 +168,25 @@ def init_socket_events(socket_io, room_svc=None, game_svc=None):
                 'room': room.to_dict(),
                 'game_started': room.started
             }, to=room_code)
+            
+        return
+            
+    @socketio.on('board_update')
+    def handle_board_update(data):
+        room_code = data.get("room_code")
+        player_id = data.get("player_id")
+        move = data.get("move", {})
+        
+        logger.info(f"Board_Update: room={room_code}, player={player_id}, move={move}")
+        dx, dy = move.get("dx"), move.get("dy")
+        if not room_code or not player_id or dx is None or dy is None:
+            emit("error", {"message": "Invalid board update payload"})
+            return
+
+        trial = game_service.update_position(room_code, player_id, dx, dy)
+        if not trial:
+            emit("error", {"message": "Failed to update position"})
+            return
+
+        handle_join_game(data)
+        return

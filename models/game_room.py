@@ -48,7 +48,53 @@ class GameRoom:
             # leave trials empty and index 0; game_service can still populate later if needed
 
         # logger.info(f"Created game room {room_code} with max {max_players} players")
+    
+    def update_player_position(self, player_id: str, dx: int, dy: int) -> bool:
+        """
+        Update a player's position in the current trial and toggle turn.
 
+        Args:
+            player_id: ID of the player moving
+            dx: delta x
+            dy: delta y
+
+        Returns:
+            bool: True if update succeeded, False otherwise
+        """
+        try:
+            current_trial_index = int(self.current_trial_index or 0)
+        except Exception:
+            current_trial_index = 0
+
+        if not self.trials or not (0 <= current_trial_index < len(self.trials)):
+            logger.warning(f"[{self.room_code}] update_player_position: No active trial")
+            return False
+
+        trial = self.trials[current_trial_index]
+
+        # Determine role (R or B) based on player_number
+        player_info = self.players.get(player_id)
+        if not player_info:
+            logger.warning(f"[{self.room_code}] update_player_position: Player not found {player_id}")
+            return False
+
+        role = "R" if player_info.get("player_number") == 0 else "B"
+
+        old_pos = trial.get("start_positions", {}).get(role)
+        if not old_pos:
+            logger.warning(f"[{self.room_code}] update_player_position: No old pos for {role}")
+            return False
+
+        # Compute new position
+        new_pos = [old_pos[0] + dx, old_pos[1] + dy]
+        trial["start_positions"][role] = new_pos
+
+        logger.info(f"[{self.room_code}] Player {player_id} ({role}) moved {dx},{dy} → {new_pos}")
+
+        # Toggle turn
+        trial["turn"] = "B" if trial.get("turn") == "R" else "R"
+
+        return True
     def add_player(self, player_id: str, username: str, is_moderator: bool = False) -> bool:
         """Add a player to the room
 
@@ -61,33 +107,42 @@ class GameRoom:
             bool: True if player was added successfully, False otherwise
         """
         logger.info(
-            f"Adding {'moderator' if is_moderator else 'player'} {username} ({player_id}) to room {self.room_code}")
+            f"Adding {'moderator' if is_moderator else 'player'} {username} ({player_id}) to room {self.room_code}"
+        )
 
         if is_moderator:
             self.players[player_id] = {
-                'username': username,
-                'moderator': True,
-                'ready': False
+                "username": username,
+                "moderator": True,
+                "ready": False,
+                "role": None,  # moderators don’t get a role
             }
             self.moderator_id = player_id
             logger.info(f"Set moderator ID to {player_id}")
             return True
 
         # Get only non-moderator players
-        real_players = [pid for pid, pdata in self.players.items() if not pdata.get('moderator', False)]
+        real_players = [pid for pid, pdata in self.players.items() if not pdata.get("moderator", False)]
         if len(real_players) >= self.max_players:
             logger.warning(f"Room {self.room_code} is full. Cannot add player {player_id}")
             return False
 
         player_number = len(real_players)
+
+        # Assign role based on join order
+        role = "R" if player_number == 0 else "B"
+
         self.players[player_id] = {
-            'username': username,
-            'player_number': player_number,
-            'ready': False,
-            'moderator': False  # explicitly set to false
+            "username": username,
+            "player_number": player_number,
+            "ready": False,
+            "moderator": False,  # explicitly set to false
+            "role": role,
         }
-        logger.info(f"Added player {username} as player number {player_number}")
+
+        logger.info(f"Added player {username} as player number {player_number} with role {role}")
         return True
+
 
     def is_full(self) -> bool:
         """Check if the room has reached maximum capacity"""

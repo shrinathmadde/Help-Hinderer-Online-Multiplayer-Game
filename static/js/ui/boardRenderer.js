@@ -68,11 +68,11 @@ export class BoardRenderer {
     }
 
     // star and players (if set)
-    if (this.target) this._drawStar(this.target);
-    if (this.players.R.pos)
-      this._drawDot(this.players.R.pos, this.players.R.color);
-    if (this.players.B.pos)
-      this._drawDot(this.players.B.pos, this.players.B.color);
+    // if (this.target) this._drawStar(this.target);
+    // if (this.players.R.pos)
+    //   this._drawDot(this.players.R.pos, this.players.R.color);
+    // if (this.players.B.pos)
+    //   this._drawDot(this.players.B.pos, this.players.B.color);
   }
 
   drawTarget(pos) {
