@@ -49,4 +49,4 @@ if __name__ == '__main__':
 
     logger.info("Starting Socket.IO server...")
 
-    socketio.run(app, host="0.0.0.0", port=5001, debug=False, use_reloader=False)
+    socketio.run(app, host="0.0.0.0", port=80, debug=False, use_reloader=False)
