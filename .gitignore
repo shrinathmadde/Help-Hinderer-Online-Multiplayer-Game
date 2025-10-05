@@ -1,3 +1,4 @@
 # .gitignore (at repo root)
- /.venv/
- /backend/
+/.venv/
+/backend/
+/venv/
