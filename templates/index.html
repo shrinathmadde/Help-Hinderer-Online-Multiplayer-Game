@@ -2,10 +2,182 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Multiplayer Game</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+    <!-- Inline CSS (no new files needed) -->
+    <style>
+      /* === Multiplayer Game – Inline Theme (no renames) === */
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+      :root{
+        --bg: #0b1020;
+        --bg-2: #0f1630;
+        --card: rgba(255,255,255,0.07);
+        --card-border: rgba(255,255,255,0.15);
+        --text: #e9ecf1;
+        --muted: #b6c0d4;
+        --primary: #6ea8fe;
+        --primary-2: #8bd6ff;
+        --accent: #9d7cff;
+        --success: #63e6be;
+        --shadow: 0 20px 60px rgba(0,0,0,0.35);
+        --radius: 16px;
+        --radius-xs: 10px;
+        --blur: blur(10px);
+        --trans: 180ms cubic-bezier(.2,.7,.2,1);
+        --trans-slow: 420ms cubic-bezier(.2,.7,.2,1);
+        --focus: 0 0 0 3px rgba(142,197,255,0.45), 0 0 0 6px rgba(142,197,255,0.15);
+      }
+
+      @media (prefers-color-scheme: light){
+        :root{
+          --bg: #f3f6fb;
+          --bg-2: #e9eef8;
+          --card: rgba(255,255,255,0.9);
+          --card-border: rgba(15,20,40,0.08);
+          --text: #141a2a;
+          --muted: #4b5467;
+          --shadow: 0 18px 50px rgba(0,0,0,0.1);
+        }
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+
+      body{
+        margin: 0;
+        font-family: "Inter", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(1200px 800px at 15% -10%, rgba(110,168,254,0.22), transparent 60%),
+          radial-gradient(900px 700px at 100% 20%, rgba(157,124,255,0.20), transparent 60%),
+          linear-gradient(180deg, var(--bg-2), var(--bg));
+        min-height: 100%;
+      }
+      body::before{
+        content:"";
+        position: fixed; inset: -20%;
+        background:
+          radial-gradient(60% 40% at 80% 10%, rgba(139,214,255,0.12), transparent 60%),
+          radial-gradient(40% 30% at 20% 80%, rgba(99,230,190,0.08), transparent 60%);
+        filter: blur(50px);
+        pointer-events: none; z-index: 0;
+        animation: floatGlow 16s ease-in-out infinite alternate;
+      }
+      @keyframes floatGlow{
+        0%{ transform: translateY(0) translateX(0) scale(1); opacity: .9; }
+        100%{ transform: translateY(12px) translateX(-10px) scale(1.02); opacity: 1; }
+      }
+
+      .container{
+        position: relative; z-index: 1;
+        max-width: 920px; margin: clamp(24px, 6vh, 80px) auto;
+        padding: 0 16px;
+      }
+
+      h1{
+        margin: 0 0 22px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1;
+        font-size: clamp(28px, 3.2vw, 44px);
+        background: linear-gradient(90deg, var(--primary), var(--accent), var(--primary-2));
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.06);
+      }
+
+      .card{
+        background: var(--card);
+        border: 1px solid var(--card-border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        backdrop-filter: var(--blur);
+        -webkit-backdrop-filter: var(--blur);
+        padding: 18px;
+        transition: transform var(--trans), box-shadow var(--trans);
+      }
+      .card:hover{ transform: translateY(-2px); box-shadow: 0 26px 70px rgba(0,0,0,0.45); }
+
+      .success-card{ border-left: 4px solid var(--success); }
+
+      .tabs{
+        display: inline-flex; gap: 6px; padding: 6px; margin-bottom: 14px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(0,0,0,0.06));
+        border: 1px solid var(--card-border); border-radius: 999px;
+      }
+      .tab-btn{
+        appearance: none; border: 0; background: transparent; color: var(--muted);
+        padding: 10px 16px; border-radius: 999px; font-weight: 600; letter-spacing: .2px;
+        transition: background var(--trans), color var(--trans), transform var(--trans);
+        cursor: pointer;
+      }
+      .tab-btn:hover{ color: var(--text); transform: translateY(-1px); }
+      .tab-btn.active{
+        background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(0,0,0,0.06));
+        color: var(--text); box-shadow: inset 0 -2px 0 rgba(255,255,255,0.08);
+      }
+
+      .tab-content{ border-top: 1px dashed var(--card-border); padding-top: 16px; animation: fadeIn var(--trans-slow); }
+      @keyframes fadeIn{ from{opacity:0; transform: translateY(6px);} to{opacity:1; transform: translateY(0);} }
+
+      form{ display: grid; gap: 14px; }
+      .form-group{ display: grid; gap: 8px; }
+      label{ font-weight: 600; color: var(--muted); font-size: 14px; }
+
+      input[type="text"]{
+        width: 100%; padding: 12px 14px; background: rgba(255,255,255,0.06);
+        color: var(--text); border: 1px solid var(--card-border); border-radius: var(--radius-xs);
+        outline: none; transition: border-color var(--trans), box-shadow var(--trans), background var(--trans);
+      }
+      input[type="text"]::placeholder{ color: rgba(200,210,230,0.6); }
+      input[type="text"]:hover{ background: rgba(255,255,255,0.08); }
+      input[type="text"]:focus{ border-color: rgba(142,197,255,0.6); box-shadow: var(--focus); }
+
+      .btn, .btn-small{
+        appearance: none; border: 0; cursor: pointer; user-select: none;
+        font-weight: 700; letter-spacing: .2px; border-radius: 12px;
+        transition: transform var(--trans), box-shadow var(--trans), filter var(--trans);
+        color: #0c1222; background: linear-gradient(180deg, #cfe3ff, #9fbeff);
+        padding: 12px 16px; box-shadow: 0 8px 20px rgba(110,168,254,0.35);
+      }
+      .btn-small{ padding: 8px 12px; font-size: 14px; }
+      .btn:hover, .btn-small:hover{ transform: translateY(-1px); filter: brightness(1.03); }
+      .btn:focus-visible, .btn-small:focus-visible{ outline: none; box-shadow: var(--focus); }
+
+      h2{ margin: 0 0 8px; font-size: clamp(18px, 1.8vw, 22px); }
+      h3{ margin: 14px 0 8px; font-size: 16px; color: var(--muted); }
+
+      #room-created{ margin-top: 18px; }
+      .code-display{ margin: 10px 0 6px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+      #room-code{
+        display: inline-block;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+        font-weight: 800; letter-spacing: .14em; font-size: clamp(16px, 2.2vw, 20px);
+        color: var(--text);
+        background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(0,0,0,0.12));
+        border: 1px solid var(--card-border); border-radius: 10px; padding: 10px 14px;
+        box-shadow: inset 0 -2px 0 rgba(255,255,255,0.08);
+      }
+
+      .players-list ul{ list-style: none; padding-left: 0; margin: 6px 0 0; }
+      .players-list li{
+        display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+        border-radius: var(--radius-xs); border: 1px dashed var(--card-border);
+        background: rgba(255,255,255,0.04);
+      }
+
+      .hidden{ display: none !important; }
+
+      #start-game{
+        background: linear-gradient(180deg, #d2ffe9, #aaf4d4);
+        box-shadow: 0 8px 20px rgba(99,230,190,0.30);
+      }
+
+      @media (max-width: 560px){
+        .card{ padding: 14px; }
+        .tabs{ width: 100%; justify-content: space-between; }
+      }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -20,7 +192,6 @@
             <div class="tab-content" id="create-content">
                 <h2>Create a New Game</h2>
                 <form id="create-form" action="javascript:void(0);">
-
                     <div class="form-group">
                         <label for="create-username">Your Name:</label>
                         <input type="text" id="create-username" required>
@@ -64,6 +235,7 @@
         </div>
     </div>
 
+    <!-- Scripts -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script type="module" src="{{ url_for('static', filename='js/pages/indexPage.js') }}"></script>
 </body>
