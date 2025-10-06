@@ -2,27 +2,48 @@ name: 🚀 Deploy to EC2
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
+      - name: Checkout (not strictly used, but fine)
         uses: actions/checkout@v4
 
-      - name: Copy files to EC2 and restart service
+      - name: Deploy & restart
         uses: appleboy/ssh-action@v0.1.10
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            cd ~/Help-Hinderer-Online-Multiplayer-Game || git clone https://github.com/${{ github.repository }}.git Help-Hinderer-Online-Multiplayer-Game
-            cd Help-Hinderer-Online-Multiplayer-Game
-            git pull
+            set -euo pipefail
+            REPO_DIR="$HOME/Help-Hinderer-Online-Multiplayer-Game"
+            BRANCH="main"
+
+            # Ensure repo exists
+            if [ ! -d "$REPO_DIR/.git" ]; then
+              git clone https://github.com/${{ github.repository }}.git "$REPO_DIR"
+            fi
+
+            cd "$REPO_DIR"
+
+            # Ensure correct branch checked out, then hard-sync to remote
+            git fetch origin
+            git checkout "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+            git clean -df
+
+            # (Optional) show the exact commit deployed
+            echo "Deployed commit: $(git rev-parse --short HEAD)"
+
+            # Python deps (create venv if missing)
+            if [ ! -d "venv" ]; then python3 -m venv venv; fi
             source venv/bin/activate
+            pip install --upgrade pip
             pip install -r requirements.txt
+
+            # Restart service
             sudo systemctl restart flaskgame
+            sudo systemctl status --no-pager --full flaskgame || true
